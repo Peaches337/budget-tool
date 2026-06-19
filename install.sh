@@ -79,10 +79,9 @@ EOF
 fi
 
 # -- Install deps, build, migrate ----------------------------------------------
-cd $APP_DIR
-sudo -u $APP_USER npm ci --quiet
-sudo -u $APP_USER npm run build
-sudo -u $APP_USER node scripts/migrate.js
+su -s /bin/bash $APP_USER -c "cd $APP_DIR && npm ci --quiet"
+su -s /bin/bash $APP_USER -c "cd $APP_DIR && npm run build"
+su -s /bin/bash $APP_USER -c "cd $APP_DIR && node scripts/migrate.js"
 
 # -- Systemd service -----------------------------------------------------------
 cat > /etc/systemd/system/skint.service <<EOF
