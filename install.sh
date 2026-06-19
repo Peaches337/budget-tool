@@ -54,9 +54,10 @@ mkdir -p $APP_DIR $BACKUP_DIR
 chown $APP_USER:$APP_USER $BACKUP_DIR
 
 # -- Clone / update ------------------------------------------------------------
+git config --global --add safe.directory $APP_DIR
 if [ -d "$APP_DIR/.git" ]; then
   echo "Updating existing install..."
-  git -C $APP_DIR pull
+  su -s /bin/bash $APP_USER -c "git -C $APP_DIR pull"
 else
   echo "Cloning repository..."
   git clone https://github.com/Peaches337/budget-tool.git $APP_DIR
