@@ -26,7 +26,12 @@ echo "  self-hosted budget app"
 echo ""
 
 # -- System deps ---------------------------------------------------------------
-apt-get update -qq
+# Remove Proxmox enterprise repos that cause 401 errors on non-subscribed hosts
+rm -f /etc/apt/sources.list.d/pve-enterprise.list \
+      /etc/apt/sources.list.d/ceph.list \
+      /etc/apt/sources.list.d/pve-no-subscription.list 2>/dev/null || true
+
+apt-get update -qq 2>&1 | grep -v "^E:.*proxmox\|^W:.*proxmox" || true
 apt-get install -y -qq curl gnupg2 lsb-release git postgresql postgresql-client
 
 # Node 22 LTS
