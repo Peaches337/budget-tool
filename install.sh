@@ -42,8 +42,8 @@ fi
 systemctl enable postgresql
 systemctl start postgresql
 
-su -c "psql -tc \"SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'\" | grep -q 1 || \
-       psql -c \"CREATE USER $DB_USER WITH PASSWORD '$DB_PASS'\"" postgres
+su -c "psql -c \"CREATE USER $DB_USER WITH PASSWORD '$DB_PASS'\" 2>/dev/null || \
+       psql -c \"ALTER USER $DB_USER WITH PASSWORD '$DB_PASS'\"" postgres
 
 su -c "psql -tc \"SELECT 1 FROM pg_database WHERE datname='$DB_NAME'\" | grep -q 1 || \
        psql -c \"CREATE DATABASE $DB_NAME OWNER $DB_USER\"" postgres
