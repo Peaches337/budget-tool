@@ -27,13 +27,8 @@ echo ""
 
 # -- System deps ---------------------------------------------------------------
 # Remove Proxmox enterprise repos that cause 401 errors on non-subscribed hosts
-rm -f /etc/apt/sources.list.d/pve-enterprise.list \
-      /etc/apt/sources.list.d/pve-enterprise.sources \
-      /etc/apt/sources.list.d/ceph.list \
-      /etc/apt/sources.list.d/ceph.sources \
-      /etc/apt/sources.list.d/pve-no-subscription.list 2>/dev/null || true
-
-apt-get update -qq 2>&1 | grep -v "^E:.*proxmox\|^W:.*proxmox" || true
+grep -rl "enterprise.proxmox.com" /etc/apt/sources.list.d/ 2>/dev/null | xargs rm -f || true
+apt-get update -qq || true
 apt-get install -y -qq curl gnupg2 lsb-release git postgresql postgresql-client
 
 # Node 22 LTS
