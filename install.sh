@@ -80,7 +80,7 @@ EOF
 fi
 
 # -- Install deps, build, migrate ----------------------------------------------
-su -s /bin/bash $APP_USER -c "cd $APP_DIR && npm ci --quiet"
+su -s /bin/bash $APP_USER -c "cd $APP_DIR && npm install --omit=dev --quiet"
 su -s /bin/bash $APP_USER -c "cd $APP_DIR && npm run build"
 su -s /bin/bash $APP_USER -c "cd $APP_DIR && node scripts/migrate.js"
 
