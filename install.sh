@@ -9,8 +9,10 @@ APP_DIR="/opt/skint"
 APP_USER="skint"
 DB_NAME="skint"
 DB_USER="skint"
+set +o pipefail
 DB_PASS=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 32)
 SESSION_SECRET=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 64)
+set -o pipefail
 BACKUP_DIR="/var/backups/skint"
 PORT=3000
 
