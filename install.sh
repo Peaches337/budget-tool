@@ -9,10 +9,6 @@ APP_DIR="/opt/skint"
 APP_USER="skint"
 DB_NAME="skint"
 DB_USER="skint"
-set +o pipefail
-DB_PASS=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 32)
-SESSION_SECRET=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 64)
-set -o pipefail
 BACKUP_DIR="/var/backups/skint"
 PORT=3000
 
@@ -42,12 +38,6 @@ fi
 systemctl enable postgresql
 systemctl start postgresql
 
-su -c "psql -c \"CREATE USER $DB_USER WITH PASSWORD '$DB_PASS'\" 2>/dev/null || \
-       psql -c \"ALTER USER $DB_USER WITH PASSWORD '$DB_PASS'\"" postgres
-
-su -c "psql -tc \"SELECT 1 FROM pg_database WHERE datname='$DB_NAME'\" | grep -q 1 || \
-       psql -c \"CREATE DATABASE $DB_NAME OWNER $DB_USER\"" postgres
-
 # -- App user & directories ----------------------------------------------------
 id -u $APP_USER &>/dev/null || useradd -r -s /bin/false -d $APP_DIR $APP_USER
 mkdir -p $APP_DIR $BACKUP_DIR
@@ -61,12 +51,20 @@ if [ -d "$APP_DIR/.git" ]; then
 else
   echo "Cloning repository..."
   git clone https://github.com/Peaches337/budget-tool.git $APP_DIR
+  chown -R $APP_USER:$APP_USER $APP_DIR
 fi
 
-chown -R $APP_USER:$APP_USER $APP_DIR
-
 # -- Environment ---------------------------------------------------------------
-if [ ! -f "$APP_DIR/.env" ]; then
+# If .env already exists, read the password from it so DB stays in sync.
+# Only generate new credentials on a fresh install.
+if [ -f "$APP_DIR/.env" ]; then
+  DB_PASS=$(grep DATABASE_URL "$APP_DIR/.env" | sed 's|.*://[^:]*:\([^@]*\)@.*|\1|')
+  echo "Using existing credentials from .env"
+else
+  set +o pipefail
+  DB_PASS=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 32)
+  SESSION_SECRET=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 64)
+  set -o pipefail
   cat > $APP_DIR/.env <<EOF
 DATABASE_URL=postgresql://$DB_USER:$DB_PASS@localhost:5432/$DB_NAME
 SESSION_SECRET=$SESSION_SECRET
@@ -79,13 +77,20 @@ EOF
   echo "Generated .env (credentials randomised)"
 fi
 
-# -- Install deps, build, migrate ----------------------------------------------
-su -s /bin/bash $APP_USER -c "cd $APP_DIR && npm install --quiet"
-su -s /bin/bash $APP_USER -c "cd $APP_DIR && npm run build"
-su -s /bin/bash $APP_USER -c "cd $APP_DIR && npm prune --omit=dev --quiet"
-su -s /bin/bash $APP_USER -c "cd $APP_DIR && node scripts/migrate.js"
+# -- Ensure DB user & database exist with correct password ---------------------
+su -s /bin/bash postgres -c "psql -c \"DO \\\$\\\$ BEGIN
+  IF EXISTS (SELECT FROM pg_roles WHERE rolname = '$DB_USER') THEN
+    ALTER USER $DB_USER WITH PASSWORD '$DB_PASS';
+  ELSE
+    CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';
+  END IF;
+END \\\$\\\$;\""
 
-# -- Systemd service -----------------------------------------------------------
+su -s /bin/bash postgres -c \
+  "psql -tc \"SELECT 1 FROM pg_database WHERE datname='$DB_NAME'\" | grep -q 1 || \
+   psql -c \"CREATE DATABASE $DB_NAME OWNER $DB_USER\""
+
+# -- Systemd service (create early so it exists even if build fails later) -----
 cat > /etc/systemd/system/skint.service <<EOF
 [Unit]
 Description=Skint budget app
@@ -103,9 +108,16 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-
 systemctl daemon-reload
 systemctl enable skint
+
+# -- Install deps, build, migrate ----------------------------------------------
+su -s /bin/bash $APP_USER -c "cd $APP_DIR && npm install --quiet"
+su -s /bin/bash $APP_USER -c "cd $APP_DIR && npm run build"
+su -s /bin/bash $APP_USER -c "cd $APP_DIR && npm prune --omit=dev --quiet"
+su -s /bin/bash $APP_USER -c "cd $APP_DIR && node scripts/migrate.js"
+
+# -- Start / restart service ---------------------------------------------------
 systemctl restart skint
 
 # -- Daily backup cron (via pg_dump, keeps 30 days) ----------------------------
