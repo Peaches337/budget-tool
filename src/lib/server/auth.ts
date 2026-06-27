@@ -67,7 +67,7 @@ export function setSessionCookie(event: RequestEvent, sessionId: string): void {
     path: '/',
     httpOnly: true,
     sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    secure: process.env.SECURE_COOKIE === 'true',
     maxAge: 60 * 60 * 24 * SESSION_DAYS
   });
 }
