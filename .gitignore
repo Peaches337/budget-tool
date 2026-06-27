@@ -17,3 +17,6 @@ backups/
 # OS
 .DS_Store
 Thumbs.db
+
+# Documents (local planning artefacts, not part of the repo)
+*.docx

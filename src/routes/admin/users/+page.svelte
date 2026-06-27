@@ -27,6 +27,8 @@
   let resetResult: { username: string; password: string } | null = null;
   let generatingInvite = false;
   let copiedInviteId = '';
+  let confirmDeleteId: string | null = null;
+  let deleting = false;
 
   onMount(async () => {
     await Promise.all([loadUsers(), loadInvites()]);
@@ -98,9 +100,25 @@
     invites = invites.filter(i => i.id !== id);
   }
 
+  async function deleteUser(userId: string) {
+    deleting = true;
+    try {
+      const res = await fetch(`/api/admin/users/${userId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (data.ok) {
+        users = users.filter(u => u.id !== userId);
+        confirmDeleteId = null;
+      }
+    } finally {
+      deleting = false;
+    }
+  }
+
   function fmtDate(d: string) {
     return new Date(d).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
   }
+
+  $: deleteTargetUser = users.find(u => u.id === confirmDeleteId) ?? null;
 </script>
 
 <div class="page">
@@ -125,39 +143,6 @@
   {#if loading}
     <p class="muted">Loading…</p>
   {:else}
-    <!-- Invite links section -->
-    <div class="section-header">
-      <h2>Invite links</h2>
-      <button class="action-btn action-btn--accent" disabled={generatingInvite} on:click={generateInvite}>
-        {generatingInvite ? 'Generating…' : '+ Generate invite link'}
-      </button>
-    </div>
-    <p class="section-hint">Invite links allow new users to register even when open registration is disabled. Each link expires in 7 days and can only be used once.</p>
-
-    {#if invites.length === 0}
-      <p class="muted invite-empty">No active invite links.</p>
-    {:else}
-      <div class="card invite-list">
-        {#each invites as inv}
-          <div class="invite-row">
-            <div class="invite-info">
-              <code class="invite-token">{window.location.origin}/register?invite={inv.token}</code>
-              <span class="invite-meta muted">Created {fmtDate(inv.created_at)}{inv.expires_at ? ` · Expires ${fmtDate(inv.expires_at)}` : ''}</span>
-            </div>
-            <div class="invite-actions">
-              <button
-                class="action-btn {copiedInviteId === inv.id ? 'action-btn--ok' : ''}"
-                on:click={() => { copyInviteLink(inv.token); copiedInviteId = inv.id; setTimeout(() => { copiedInviteId = ''; }, 3000); }}
-              >
-                {copiedInviteId === inv.id ? 'Copied!' : 'Copy'}
-              </button>
-              <button class="action-btn action-btn--danger" on:click={() => revokeInvite(inv.id)}>Revoke</button>
-            </div>
-          </div>
-        {/each}
-      </div>
-    {/if}
-
     <div class="users-header">
       <h2>Users</h2>
     </div>
@@ -199,6 +184,11 @@
                 >
                   Reset password
                 </button>
+                {#if u.id !== data.user?.id}
+                  <button class="action-btn action-btn--danger" on:click={() => { confirmDeleteId = u.id; }}>
+                    Delete
+                  </button>
+                {/if}
               </td>
             </tr>
           {/each}
@@ -207,6 +197,21 @@
     </div>
   {/if}
 </div>
+
+{#if confirmDeleteId && deleteTargetUser}
+  <div class="modal-backdrop" on:click={() => { confirmDeleteId = null; }}>
+    <div class="modal-box" on:click={(e) => { e.stopPropagation(); }}>
+      <h3>Delete user</h3>
+      <p>Are you sure you want to delete <strong>{deleteTargetUser.username}</strong>? This cannot be undone — all their budget data will be permanently removed.</p>
+      <div class="modal-actions">
+        <button class="btn-cancel" on:click={() => { confirmDeleteId = null; }}>Cancel</button>
+        <button class="btn-confirm-delete" disabled={deleting} on:click={() => deleteUser(confirmDeleteId)}>
+          {deleting ? 'Deleting…' : 'Yes, delete user'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <style>
   .section-header {
@@ -483,4 +488,28 @@
   }
 
   .btn-dismiss:hover { background: var(--surface-2); }
+
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,.5);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 1000; padding: 1rem;
+  }
+  .modal-box {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 1.75rem; max-width: 420px; width: 100%;
+    box-shadow: 0 8px 40px rgba(0,0,0,.3);
+  }
+  .modal-box h3 { font-size: 1rem; font-weight: 700; margin: 0 0 .75rem; }
+  .modal-box p { font-size: .9rem; color: var(--fg-muted); margin: 0 0 1.5rem; line-height: 1.5; }
+  .modal-box p strong { color: var(--fg); }
+  .modal-actions { display: flex; justify-content: flex-end; gap: .6rem; }
+  .btn-cancel {
+    padding: .5rem 1rem; background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 7px; cursor: pointer; font-size: .875rem; color: var(--fg);
+  }
+  .btn-confirm-delete {
+    padding: .5rem 1.1rem; background: var(--neg, #e24b4a); color: #fff;
+    border: none; border-radius: 7px; cursor: pointer; font-size: .875rem; font-weight: 600;
+  }
+  .btn-confirm-delete:disabled { opacity: .5; cursor: not-allowed; }
 </style>

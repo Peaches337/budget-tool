@@ -9,7 +9,7 @@ export const POST: RequestHandler = async (event) => {
 
   // Check whether open registration is allowed
   const cfg = await queryOne<{ value: string }>(
-    `SELECT value FROM admin_config WHERE key = 'allow_registration'`,
+    `SELECT value FROM app_config WHERE key = 'registration_open'`,
     []
   );
   const registrationOpen = (cfg?.value ?? 'true') === 'true';
@@ -79,7 +79,7 @@ export const POST: RequestHandler = async (event) => {
   const session = await createSession(user.id);
   setSessionCookie(event, session.id);
 
-  event.locals.user = { id: user.id, username: username.trim().toLowerCase(), email: email.trim().toLowerCase(), is_admin: isAdmin, created_at: new Date().toISOString() };
+  event.locals.user = { id: user.id, username: username.trim().toLowerCase(), email: email.trim().toLowerCase(), is_admin: isAdmin, created_at: new Date().toISOString(), wizard_completed: false };
   await auditLog(event, 'user_registered', { entity: 'user', entity_id: user.id, details: { username, email: email.trim().toLowerCase(), is_admin: isAdmin, via_invite: !!invite_token } });
 
   return json({ ok: true, data: { id: user.id, username, isAdmin } }, { status: 201 });

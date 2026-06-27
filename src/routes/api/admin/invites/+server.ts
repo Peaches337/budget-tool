@@ -8,11 +8,12 @@ export async function GET({ locals }: RequestEvent) {
   if (!locals.user?.is_admin) return json({ ok: false, error: 'Forbidden' }, { status: 403 });
 
   const rows = await query(
-    `SELECT ri.id, ri.token, ri.expires_at, ri.created_at, u.username AS created_by
+    `SELECT ri.id, ri.token, ri.expires_at, ri.created_at, ri.used_at,
+            u.username AS created_by,
+            uu.username AS used_by
      FROM registration_invites ri
      JOIN users u ON u.id = ri.created_by
-     WHERE ri.used_at IS NULL
-       AND (ri.expires_at IS NULL OR ri.expires_at > now())
+     LEFT JOIN users uu ON uu.id = ri.used_by
      ORDER BY ri.created_at DESC`,
     []
   );

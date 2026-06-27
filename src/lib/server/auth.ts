@@ -12,6 +12,7 @@ export type User = {
   email: string;
   is_admin: boolean;
   created_at: string;
+  wizard_completed: boolean;
 };
 
 export type Session = {
@@ -43,7 +44,7 @@ export async function createSession(userId: string): Promise<Session> {
 
 export async function getSessionUser(sessionId: string): Promise<User | null> {
   return queryOne<User>(
-    `SELECT u.id, u.username, u.email, u.is_admin, u.created_at
+    `SELECT u.id, u.username, u.email, u.is_admin, u.created_at, u.wizard_completed
      FROM sessions s
      JOIN users u ON u.id = s.user_id
      WHERE s.id = $1 AND s.expires_at > now()`,
@@ -66,7 +67,7 @@ export function setSessionCookie(event: RequestEvent, sessionId: string): void {
     path: '/',
     httpOnly: true,
     sameSite: 'lax',
-    secure: false,
+    secure: process.env.NODE_ENV === 'production',
     maxAge: 60 * 60 * 24 * SESSION_DAYS
   });
 }

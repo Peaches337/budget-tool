@@ -1,5 +1,6 @@
 <script lang="ts">
   import '../app.css';
+  import { onMount } from 'svelte';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import type { LayoutData } from './$types';
@@ -10,6 +11,8 @@
 
   $: user = data.user;
   $: isAuth = $page.url.pathname === '/login' || $page.url.pathname === '/register';
+
+  $: instanceLogo = data.instanceLogo ?? '';
 
   const navItems = [
     { href: '/',              label: 'Summary',      icon: '▦' },
@@ -39,7 +42,11 @@
     <!-- ── Sidebar ── -->
     <aside class="sidebar">
       <div class="sidebar-logo">
-        <span class="logo-mark">$</span>
+        {#if instanceLogo}
+          <img src={instanceLogo} alt="Logo" class="instance-logo-img" />
+        {:else}
+          <span class="logo-mark">$</span>
+        {/if}
         <span class="logo-text">Skint</span>
       </div>
 
@@ -292,6 +299,8 @@
   }
 
   .logout-btn:hover { color: #fca5a5; background: rgba(220,38,38,.12); }
+
+  .instance-logo-img { height: 28px; max-width: 80px; object-fit: contain; }
 
   /* ── Content ── */
   .content {

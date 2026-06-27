@@ -4,121 +4,123 @@
 
 set -euo pipefail
 
-# ── Colours ───────────────────────────────────────────────────────────────────
-GRN='\033[0;32m'; YLW='\033[1;33m'; RED='\033[0;31m'; RST='\033[0m'; BLD='\033[1m'
-
-echo ""
-echo -e "${BLD}  ____  _    _       _${RST}"
-echo -e "${BLD} / ___|| | _(_)_ __ | |_${RST}"
-echo -e "${BLD} \\___ \\| |/ / | '_ \\| __|${RST}"
-echo -e "${BLD}  ___) |   <| | | | | |_${RST}"
-echo -e "${BLD} |____/|_|\\_\\_|_| |_|\\__|${RST}"
-echo -e "  LXC setup for Proxmox"
-echo ""
-
 # ── Must run as root on Proxmox ───────────────────────────────────────────────
 if [ "$(id -u)" != "0" ]; then
-  echo -e "${RED}Error: run this script as root on the Proxmox host.${RST}" >&2
+  echo "Error: run this script as root on the Proxmox host." >&2
   exit 1
 fi
 if ! command -v pct &>/dev/null; then
-  echo -e "${RED}Error: pct not found — is this a Proxmox host?${RST}" >&2
+  echo "Error: pct not found — is this a Proxmox host?" >&2
   exit 1
 fi
 
-# ── Helper: prompt with default ───────────────────────────────────────────────
-ask() {
-  local prompt="$1" default="$2" var_name="$3"
-  local answer
-  read -rp "$(echo -e "  ${YLW}${prompt}${RST} [${default}]: ")" answer
-  eval "$var_name=\"${answer:-$default}\""
-}
+# ── Require whiptail ──────────────────────────────────────────────────────────
+if ! command -v whiptail &>/dev/null; then
+  apt-get install -y whiptail &>/dev/null || true
+fi
+if ! command -v whiptail &>/dev/null; then
+  echo "Error: whiptail is required but could not be installed." >&2
+  exit 1
+fi
 
-ask_required() {
-  local prompt="$1" var_name="$2"
-  local answer
-  while true; do
-    read -rp "$(echo -e "  ${YLW}${prompt}${RST}: ")" answer
-    if [ -n "$answer" ]; then
-      eval "$var_name=\"$answer\""
-      break
-    fi
-    echo -e "  ${RED}Required — please enter a value.${RST}"
-  done
-}
+TITLE="Skint — LXC Setup"
+
+# ── Welcome ───────────────────────────────────────────────────────────────────
+whiptail --title "$TITLE" --msgbox \
+"Welcome to the Skint installer for Proxmox VE.
+
+This wizard will create a Debian 12 LXC container and
+install Skint inside it automatically.
+
+Press OK to begin." 14 58
 
 # ── Suggest next free CTID ────────────────────────────────────────────────────
 NEXT_ID=$(pvesh get /cluster/nextid 2>/dev/null || echo 200)
 
-echo -e "${BLD}Container settings${RST}"
-echo ""
+# ── Container settings ────────────────────────────────────────────────────────
+CT_ID=$(whiptail --title "$TITLE" --inputbox \
+  "Container ID" 8 42 "$NEXT_ID" 3>&1 1>&2 2>&3) || exit 0
 
-ask "LXC ID"          "$NEXT_ID"   CT_ID
-ask "Hostname"        "skint"      CT_NAME
-ask "Memory (MB)"     "1024"       CT_MEM
-ask "Swap (MB)"       "512"        CT_SWAP
-ask "CPU cores"       "2"          CT_CPUS
-ask "Disk size (GB)"  "8"          CT_DISK
-ask "Storage pool"    "local-lvm"  CT_STORAGE
-ask "Network bridge"  "vmbr0"      CT_BRIDGE
+CT_NAME=$(whiptail --title "$TITLE" --inputbox \
+  "Hostname" 8 42 "skint" 3>&1 1>&2 2>&3) || exit 0
 
-echo ""
-echo -e "${BLD}Network${RST}"
-echo ""
-echo -e "  ${YLW}IP assignment${RST}"
-echo "    1) DHCP (automatic)"
-echo "    2) Static IP"
-read -rp "  Choice [1]: " NET_CHOICE
-NET_CHOICE="${NET_CHOICE:-1}"
+CT_MEM=$(whiptail --title "$TITLE" --inputbox \
+  "Memory (MB)" 8 42 "1024" 3>&1 1>&2 2>&3) || exit 0
+
+CT_SWAP=$(whiptail --title "$TITLE" --inputbox \
+  "Swap (MB)" 8 42 "512" 3>&1 1>&2 2>&3) || exit 0
+
+CT_CPUS=$(whiptail --title "$TITLE" --inputbox \
+  "CPU cores" 8 42 "2" 3>&1 1>&2 2>&3) || exit 0
+
+CT_DISK=$(whiptail --title "$TITLE" --inputbox \
+  "Disk size (GB)" 8 42 "8" 3>&1 1>&2 2>&3) || exit 0
+
+CT_STORAGE=$(whiptail --title "$TITLE" --inputbox \
+  "Storage pool" 8 42 "local-lvm" 3>&1 1>&2 2>&3) || exit 0
+
+CT_BRIDGE=$(whiptail --title "$TITLE" --inputbox \
+  "Network bridge" 8 42 "vmbr0" 3>&1 1>&2 2>&3) || exit 0
+
+# ── Network ───────────────────────────────────────────────────────────────────
+NET_CHOICE=$(whiptail --title "$TITLE" --menu \
+  "IP assignment" 12 52 2 \
+  "1" "DHCP (automatic)" \
+  "2" "Static IP" \
+  3>&1 1>&2 2>&3) || exit 0
 
 if [ "$NET_CHOICE" = "2" ]; then
-  ask_required "Static IP (e.g. 192.168.1.100/24)"  CT_IP
-  ask_required "Gateway (e.g. 192.168.1.1)"          CT_GW
+  CT_IP=""
+  while [ -z "$CT_IP" ]; do
+    CT_IP=$(whiptail --title "$TITLE" --inputbox \
+      "Static IP with prefix (e.g. 192.168.1.100/24)" 8 58 "" 3>&1 1>&2 2>&3) || exit 0
+  done
+
+  CT_GW=""
+  while [ -z "$CT_GW" ]; do
+    CT_GW=$(whiptail --title "$TITLE" --inputbox \
+      "Gateway (e.g. 192.168.1.1)" 8 50 "" 3>&1 1>&2 2>&3) || exit 0
+  done
+
   NET_CONFIG="ip=${CT_IP},gw=${CT_GW}"
 else
   NET_CONFIG="ip=dhcp"
 fi
 
-echo ""
-echo -e "${BLD}DNS${RST}"
-echo ""
-ask "DNS server" "1.1.1.1" CT_DNS
+# ── DNS ───────────────────────────────────────────────────────────────────────
+CT_DNS=$(whiptail --title "$TITLE" --inputbox \
+  "DNS server" 8 42 "1.1.1.1" 3>&1 1>&2 2>&3) || exit 0
 
-echo ""
-echo -e "${BLD}Root password for the container${RST}"
-echo ""
-read -rsp "  $(echo -e "${YLW}Root password${RST}"): " CT_PASS
-echo ""
-read -rsp "  $(echo -e "${YLW}Confirm password${RST}"): " CT_PASS2
-echo ""
-if [ "$CT_PASS" != "$CT_PASS2" ]; then
-  echo -e "${RED}Passwords do not match.${RST}" >&2
-  exit 1
-fi
+# ── Root password ─────────────────────────────────────────────────────────────
+CT_PASS=""
+CT_PASS2="x"
+while [ "$CT_PASS" != "$CT_PASS2" ] || [ -z "$CT_PASS" ]; do
+  if [ "$CT_PASS" != "$CT_PASS2" ] && [ -n "$CT_PASS" ]; then
+    whiptail --title "$TITLE" --msgbox "Passwords do not match — please try again." 8 42
+  fi
+  CT_PASS=$(whiptail --title "$TITLE" --passwordbox \
+    "Root password for the container" 8 50 3>&1 1>&2 2>&3) || exit 0
+  CT_PASS2=$(whiptail --title "$TITLE" --passwordbox \
+    "Confirm root password" 8 50 3>&1 1>&2 2>&3) || exit 0
+done
 
-# ── Confirm ───────────────────────────────────────────────────────────────────
-echo ""
-echo -e "${BLD}Summary${RST}"
-echo "  ─────────────────────────────"
-echo "  LXC ID:     $CT_ID"
-echo "  Hostname:   $CT_NAME"
-echo "  Memory:     ${CT_MEM} MB  (swap ${CT_SWAP} MB)"
-echo "  CPUs:       $CT_CPUS"
-echo "  Disk:       ${CT_DISK} GB on $CT_STORAGE"
-echo "  Network:    $CT_BRIDGE — $NET_CONFIG"
-echo "  DNS:        $CT_DNS"
-echo "  ─────────────────────────────"
-echo ""
-read -rp "  Proceed? [Y/n]: " CONFIRM
-CONFIRM="${CONFIRM:-Y}"
-if [[ "$CONFIRM" != "Y" && "$CONFIRM" != "y" ]]; then
-  echo "Aborted."
-  exit 0
-fi
+# ── Summary / confirm ─────────────────────────────────────────────────────────
+whiptail --title "$TITLE" --yesno \
+"Ready to create the container:
+
+  LXC ID:    $CT_ID
+  Hostname:  $CT_NAME
+  Memory:    ${CT_MEM} MB  (swap ${CT_SWAP} MB)
+  CPUs:      $CT_CPUS
+  Disk:      ${CT_DISK} GB on $CT_STORAGE
+  Network:   $CT_BRIDGE — $NET_CONFIG
+  DNS:       $CT_DNS
+
+Proceed?" 18 56 || exit 0
 
 # ── Download Debian 12 template ───────────────────────────────────────────────
 echo ""
-echo -e "${GRN}→ Checking for Debian 12 template...${RST}"
+echo "→ Checking for Debian 12 template..."
 TMPL_STORAGE="local"
 TMPL=$(pveam list $TMPL_STORAGE 2>/dev/null | awk '/debian-12/' | tail -1 | awk '{print $1}')
 if [ -z "$TMPL" ]; then
@@ -126,7 +128,7 @@ if [ -z "$TMPL" ]; then
   pveam update
   TMPL_NAME=$(pveam available --section system 2>/dev/null | awk '/debian-12/' | tail -1 | awk '{print $2}')
   if [ -z "$TMPL_NAME" ]; then
-    echo -e "${RED}Could not find Debian 12 template. Check: pveam available --section system${RST}" >&2
+    echo "Error: could not find Debian 12 template. Check: pveam available --section system" >&2
     exit 1
   fi
   pveam download $TMPL_STORAGE "$TMPL_NAME"
@@ -137,7 +139,7 @@ fi
 
 # ── Create the container ──────────────────────────────────────────────────────
 echo ""
-echo -e "${GRN}→ Creating LXC $CT_ID ($CT_NAME)...${RST}"
+echo "→ Creating LXC $CT_ID ($CT_NAME)..."
 pct create "$CT_ID" "$TMPL" \
   --hostname "$CT_NAME" \
   --memory "$CT_MEM" \
@@ -151,12 +153,12 @@ pct create "$CT_ID" "$TMPL" \
   --features nesting=1 \
   --start 1
 
-echo -e "${GRN}→ Container started. Waiting for network...${RST}"
+echo "→ Container started. Waiting for network..."
 sleep 5
 
 # ── Run Skint install inside the container ────────────────────────────────────
 echo ""
-echo -e "${GRN}→ Running Skint install inside LXC $CT_ID...${RST}"
+echo "→ Running Skint install inside LXC $CT_ID..."
 echo ""
 pct exec "$CT_ID" -- bash -c \
   "curl -fsSL 'https://raw.githubusercontent.com/Peaches337/budget-tool/main/install.sh?$(date +%s)' | bash"
@@ -164,13 +166,18 @@ pct exec "$CT_ID" -- bash -c \
 # ── Get IP for display ────────────────────────────────────────────────────────
 CT_ACTUAL_IP=$(pct exec "$CT_ID" -- hostname -I 2>/dev/null | awk '{print $1}' || echo "see container console")
 
+# ── Done ─────────────────────────────────────────────────────────────────────
+whiptail --title "$TITLE" --msgbox \
+"  Installation complete!
+
+  Open Skint:
+  http://${CT_ACTUAL_IP}:3000
+
+  Manage container:
+    pct stop $CT_ID  / pct start $CT_ID
+    pct enter $CT_ID  (root shell)
+    systemctl status skint  (inside container)" 16 56
+
 echo ""
-echo -e "${GRN}  ✓ Done!${RST}"
-echo ""
-echo -e "  Open Skint: ${BLD}http://${CT_ACTUAL_IP}:3000${RST}"
-echo ""
-echo "  Manage container:"
-echo "    pct stop $CT_ID   / pct start $CT_ID"
-echo "    pct enter $CT_ID  (root shell)"
-echo "    systemctl status skint  (inside container)"
+echo "Done. Open Skint: http://${CT_ACTUAL_IP}:3000"
 echo ""

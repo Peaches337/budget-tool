@@ -14,6 +14,7 @@
   }
 
   // ── State ───────────────────────────────────────────────────────────────────
+  let showEarlyBuildBanner = true;
   let fy = currentFY();
   let settings: TaxSettings | null = null;
   let loading = true;
@@ -388,6 +389,16 @@
 </script>
 
 <div class="page">
+  {#if showEarlyBuildBanner}
+    <div class="early-build-banner">
+      <span class="early-build-icon">🚧</span>
+      <div class="early-build-text">
+        <strong>Early build</strong>
+        <span>Tax Hub is under active development. Features may change or be incomplete.</span>
+      </div>
+      <button class="early-build-dismiss" on:click={() => { showEarlyBuildBanner = false; }}>✕</button>
+    </div>
+  {/if}
   <div class="page-header">
     <div>
       <h1>Tax Tool</h1>
@@ -1099,6 +1110,25 @@
   .banner--warn { background: rgba(251,191,36,.1); border: 1px solid rgba(251,191,36,.3); color: #b45309; }
 
   .guidance-note { background: rgba(99,102,241,.06); border: 1px solid rgba(99,102,241,.2); border-radius: var(--radius-sm); padding: .65rem .85rem; font-size: .83rem; color: var(--fg-muted); margin-bottom: 1rem; }
+
+  /* ── Early build banner ── */
+  .early-build-banner {
+    display: flex; align-items: center; gap: .75rem;
+    background: color-mix(in srgb, #f59e0b 12%, var(--surface));
+    border: 1px solid color-mix(in srgb, #f59e0b 40%, transparent);
+    border-radius: 8px; padding: .75rem 1rem;
+    margin-bottom: 1.25rem;
+  }
+  .early-build-icon { font-size: 1.1rem; flex-shrink: 0; }
+  .early-build-text { flex: 1; display: flex; flex-direction: column; gap: .1rem; font-size: .83rem; }
+  .early-build-text strong { color: #f59e0b; font-weight: 600; }
+  .early-build-text span { color: var(--fg-muted); }
+  .early-build-dismiss {
+    background: none; border: none; cursor: pointer;
+    color: var(--fg-muted); font-size: .85rem; padding: .2rem .4rem;
+    border-radius: 4px; flex-shrink: 0;
+  }
+  .early-build-dismiss:hover { background: rgba(255,255,255,.08); color: var(--fg); }
 
   /* ── Buttons ── */
   .btn-primary { padding: .5rem 1rem; background: var(--accent); color: #fff; border: none; border-radius: var(--radius-sm); font-size: .875rem; font-weight: 500; cursor: pointer; transition: background 150ms, opacity 150ms; white-space: nowrap; }

@@ -13,9 +13,9 @@ export const POST: RequestHandler = async (event) => {
 
   const user = await queryOne<{
     id: string; username: string; email: string;
-    password_hash: string; is_admin: boolean;
+    password_hash: string; is_admin: boolean; wizard_completed: boolean;
   }>(
-    'SELECT id, username, email, password_hash, is_admin FROM users WHERE username = $1',
+    'SELECT id, username, email, password_hash, is_admin, wizard_completed FROM users WHERE username = $1',
     [username.trim().toLowerCase()]
   );
 
@@ -26,7 +26,7 @@ export const POST: RequestHandler = async (event) => {
   const session = await createSession(user.id);
   setSessionCookie(event, session.id);
 
-  event.locals.user = { id: user.id, username: user.username, email: user.email, is_admin: user.is_admin, created_at: new Date().toISOString() };
+  event.locals.user = { id: user.id, username: user.username, email: user.email, is_admin: user.is_admin, created_at: new Date().toISOString(), wizard_completed: user.wizard_completed };
   await auditLog(event, 'login', { entity: 'user', entity_id: user.id, details: { username: user.username } });
 
   return json({

@@ -94,6 +94,7 @@
   let bankLoading = false;
   let showDeleteConfirm = false;
   let deleteAll = false;
+  let activeProvider: string | null = null;
 
   onMount(() => { loadBankConnection(); loadCoinspot(); });
 
@@ -323,152 +324,107 @@
   <div class="section">
     <h2>Connected Accounts</h2>
 
-    {#if bankError}
-      <div class="bank-banner bank-banner--err">{bankError}</div>
+    {#if bankError || csError}
+      <div class="bank-banner bank-banner--err">{bankError || csError}</div>
     {/if}
-    {#if bankSuccess}
-      <div class="bank-banner bank-banner--ok">{bankSuccess}</div>
+    {#if bankSuccess || csSuccess}
+      <div class="bank-banner bank-banner--ok">{bankSuccess || csSuccess}</div>
     {/if}
 
-    {#if $bankConnection === undefined}
-      <div class="setting-row"><span class="setting-hint">Loading…</span></div>
-    {:else if $bankConnection}
-      <!-- Connected -->
-      <div class="setting-row">
-        <div>
-          <div class="setting-label">Up Bank</div>
-          <div class="setting-hint">
-            {$bankConnection.display_name ?? 'Connected'}
-            {#if $bankConnection.last_synced_at}
-              · Last synced {new Date($bankConnection.last_synced_at).toLocaleString()}
-            {/if}
-          </div>
+    <div class="providers-list">
+
+      <!-- Up Bank row -->
+      <div class="provider-row">
+        <div class="provider-info">
+          <span class="provider-name">Up Bank</span>
+          {#if $bankConnection === undefined}
+            <span class="provider-status">Loading…</span>
+          {:else if $bankConnection}
+            <span class="provider-status provider-status--connected">Connected
+              {#if $bankConnection.last_synced_at}
+                · {new Date($bankConnection.last_synced_at).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+              {/if}
+            </span>
+          {:else}
+            <span class="provider-status provider-status--none">Not connected</span>
+          {/if}
         </div>
-        <div class="bank-actions">
-          <button class="btn-secondary" disabled={$bankSyncing} on:click={syncNow}>
-            {$bankSyncing ? 'Syncing…' : 'Sync now'}
-          </button>
-          <button class="btn-danger" on:click={() => { showDeleteConfirm = true; }}>Disconnect</button>
+        <div class="provider-actions">
+          {#if $bankConnection}
+            <button class="btn-ghost" disabled={$bankSyncing} on:click={syncNow}>{$bankSyncing ? 'Syncing…' : 'Sync'}</button>
+            <button class="btn-danger-sm" on:click={() => { showDeleteConfirm = true; }}>Disconnect</button>
+          {:else if $bankConnection === null}
+            <button class="btn-ghost" on:click={() => { activeProvider = activeProvider === 'upbank' ? null : 'upbank'; }}>
+              {activeProvider === 'upbank' ? 'Cancel' : 'Connect'}
+            </button>
+          {/if}
         </div>
       </div>
-
-      {#if $bankConnection.balances?.length}
+      {#if activeProvider === 'upbank'}
+        <div class="provider-form">
+          <p class="provider-form-hint">Enter your personal access token from <strong>Up → Settings → API</strong>. Encrypted at rest.</p>
+          <div class="provider-form-row">
+            <input class="pw-input" type="password" placeholder="up:yeah:..." bind:value={tokenInput} autocomplete="off"
+              on:keydown={(e) => { if (e.key === 'Enter') { connectBank(); activeProvider = null; } }} />
+            <button class="btn-primary" disabled={bankLoading} on:click={() => { connectBank(); activeProvider = null; }}>
+              {bankLoading ? 'Connecting…' : 'Connect'}
+            </button>
+          </div>
+        </div>
+      {/if}
+      {#if $bankConnection?.balances?.length}
         <div class="balances-grid">
           {#each $bankConnection.balances as bal}
             <div class="balance-card">
               <div class="balance-name">{bal.display_name}</div>
               <div class="balance-type">{bal.account_type.toLowerCase()}</div>
-              <div class="balance-amount">
-                {(bal.balance_cents / 100).toLocaleString('en-AU', { style: 'currency', currency: bal.currency || 'AUD' })}
-              </div>
+              <div class="balance-amount">{(bal.balance_cents / 100).toLocaleString('en-AU', { style: 'currency', currency: bal.currency || 'AUD' })}</div>
             </div>
           {/each}
         </div>
       {/if}
-    {:else}
-      <!-- Not connected -->
-      <div class="setting-row setting-row--col">
-        <div class="setting-label">Up Bank</div>
-        <div class="setting-hint">
-          Enter your personal access token from the Up app (<strong>Up → Settings → API</strong>).
-          Your token is encrypted at rest and never shared.
+
+      <!-- CoinSpot row -->
+      <div class="provider-row">
+        <div class="provider-info">
+          <span class="provider-name">CoinSpot</span>
+          {#if coinspotConn === undefined}
+            <span class="provider-status">Loading…</span>
+          {:else if coinspotConn}
+            <span class="provider-status provider-status--connected">Connected
+              {#if coinspotConn.last_synced_at}
+                · {new Date(coinspotConn.last_synced_at).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+              {/if}
+            </span>
+          {:else}
+            <span class="provider-status provider-status--none">Not connected</span>
+          {/if}
         </div>
-        <div class="bank-token-form">
-          <input
-            class="pw-input"
-            type="password"
-            placeholder="up:yeah:..."
-            bind:value={tokenInput}
-            autocomplete="off"
-            on:keydown={(e) => { if (e.key === 'Enter') connectBank(); }}
-          />
-          <button class="btn-primary" disabled={bankLoading} on:click={connectBank}>
-            {bankLoading ? 'Connecting…' : 'Connect'}
-          </button>
+        <div class="provider-actions">
+          {#if coinspotConn}
+            <button class="btn-ghost" disabled={csSyncing} on:click={syncCoinspot}>{csSyncing ? 'Syncing…' : 'Sync'}</button>
+            <button class="btn-danger-sm" on:click={() => { showCsDisconnect = true; }}>Disconnect</button>
+          {:else if coinspotConn === null}
+            <button class="btn-ghost" on:click={() => { activeProvider = activeProvider === 'coinspot' ? null : 'coinspot'; }}>
+              {activeProvider === 'coinspot' ? 'Cancel' : 'Connect'}
+            </button>
+          {/if}
         </div>
       </div>
-    {/if}
-
-    <!-- CoinSpot divider -->
-    <div class="provider-divider"></div>
-
-    {#if csError}
-      <div class="bank-banner bank-banner--err">{csError}</div>
-    {/if}
-    {#if csSuccess}
-      <div class="bank-banner bank-banner--ok">{csSuccess}</div>
-    {/if}
-
-    {#if coinspotConn === undefined}
-      <div class="setting-row"><span class="setting-hint">Loading…</span></div>
-    {:else if coinspotConn}
-      <!-- Connected -->
-      <div class="setting-row">
-        <div>
-          <div class="setting-label">CoinSpot</div>
-          <div class="setting-hint">
-            Connected
-            {#if coinspotConn.last_synced_at}
-              · Last synced {new Date(coinspotConn.last_synced_at).toLocaleString()}
-            {/if}
+      {#if activeProvider === 'coinspot'}
+        <div class="provider-form">
+          <p class="provider-form-hint">Enter your CoinSpot API credentials. Read-only API key recommended.</p>
+          <div class="provider-form-row">
+            <input class="pw-input" type="text" placeholder="API key" bind:value={csApiKey} autocomplete="off" />
+            <input class="pw-input" type="password" placeholder="API secret" bind:value={csApiSecret} autocomplete="off" />
+            <button class="btn-primary" disabled={csLoading} on:click={() => { connectCoinspot(); activeProvider = null; }}>
+              {csLoading ? 'Connecting…' : 'Connect'}
+            </button>
           </div>
         </div>
-        <div class="bank-actions">
-          <button class="btn-secondary" disabled={csSyncing} on:click={syncCoinspot}>
-            {csSyncing ? 'Syncing…' : 'Sync now'}
-          </button>
-          <button class="btn-danger" on:click={() => { showCsDisconnect = true; }}>Disconnect</button>
-        </div>
-      </div>
-
-      {#if coinspotConn.balances?.length}
-        <div class="balances-grid">
-          {#each coinspotConn.balances as bal}
-            <div class="balance-card">
-              <div class="balance-name">{bal.coin_type}</div>
-              <div class="balance-type">{Number(bal.balance).toLocaleString('en-AU', { maximumSignificantDigits: 6 })} {bal.coin_type}</div>
-              <div class="balance-amount">
-                {Number(bal.aud_balance).toLocaleString('en-AU', { style: 'currency', currency: 'AUD' })}
-              </div>
-            </div>
-          {/each}
-        </div>
       {/if}
-    {:else}
-      <!-- Not connected -->
-      <div class="setting-row setting-row--col">
-        <div class="setting-label">CoinSpot</div>
-        <div class="setting-hint">
-          Enter your read-only API key and secret from CoinSpot
-          (<strong>Account → API Keys → Read Only</strong>).
-          Your credentials are encrypted at rest and never shared.
-        </div>
-        <div class="bank-token-form bank-token-form--two">
-          <input
-            id="cs-api-key"
-            name="cs-api-key"
-            class="pw-input"
-            type="password"
-            placeholder="API key"
-            bind:value={csApiKey}
-            autocomplete="off"
-          />
-          <input
-            id="cs-api-secret"
-            name="cs-api-secret"
-            class="pw-input"
-            type="password"
-            placeholder="API secret"
-            bind:value={csApiSecret}
-            autocomplete="off"
-            on:keydown={(e) => { if (e.key === 'Enter') connectCoinspot(); }}
-          />
-          <button class="btn-primary" disabled={csLoading} on:click={connectCoinspot}>
-            {csLoading ? 'Connecting…' : 'Connect'}
-          </button>
-        </div>
-      </div>
-    {/if}
+
+    </div>
   </div>
 
   <div class="section">
@@ -779,4 +735,22 @@
     margin-bottom: .5rem;
     cursor: pointer;
   }
+
+  .providers-list { display: flex; flex-direction: column; gap: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin: .75rem 1rem 1rem; }
+  .provider-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .85rem 1rem; background: var(--surface-1); border-bottom: 1px solid var(--border); }
+  .provider-row:last-of-type { border-bottom: none; }
+  .provider-info { display: flex; flex-direction: column; gap: .15rem; }
+  .provider-name { font-weight: 600; font-size: .88rem; }
+  .provider-status { font-size: .75rem; color: var(--fg-muted); }
+  .provider-status--connected { color: var(--accent); }
+  .provider-status--none { color: var(--fg-muted); }
+  .provider-actions { display: flex; gap: .5rem; align-items: center; flex-shrink: 0; }
+  .provider-form { padding: 1rem; background: var(--surface-2); border-bottom: 1px solid var(--border); }
+  .provider-form-hint { font-size: .78rem; color: var(--fg-muted); margin: 0 0 .75rem; }
+  .provider-form-row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+  .btn-ghost { padding: .35rem .75rem; font-size: .8rem; border-radius: var(--radius-sm); border: 1px solid var(--border); background: transparent; color: var(--fg); cursor: pointer; transition: background 120ms; }
+  .btn-ghost:hover:not(:disabled) { background: var(--surface-2); }
+  .btn-ghost:disabled { opacity: .55; cursor: not-allowed; }
+  .btn-danger-sm { font-size: .78rem; padding: .3rem .65rem; border-radius: 5px; border: 1px solid color-mix(in srgb, var(--danger, #e05) 50%, transparent); color: var(--danger, #e05); background: transparent; cursor: pointer; }
+  .btn-danger-sm:hover { background: color-mix(in srgb, var(--danger, #e05) 10%, transparent); }
 </style>

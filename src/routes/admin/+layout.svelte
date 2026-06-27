@@ -9,6 +9,7 @@
 
   const sections = [
     { href: '/admin/users',         label: 'Users',         icon: '👤', color: '#6366f1' },
+    { href: '/admin/invites',       label: 'Invites',       icon: '✉',  color: '#ec4899' },
     { href: '/admin/households',    label: 'Households',    icon: '⌂',  color: '#0ea5e9' },
     { href: '/admin/templates',     label: 'Templates',     icon: '◧',  color: '#10b981' },
     { href: '/admin/subscriptions', label: 'Subscriptions', icon: '▶',  color: '#8b5cf6' },

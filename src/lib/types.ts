@@ -12,6 +12,7 @@ export type User = {
   email: string;
   is_admin: boolean;
   created_at: string;
+  wizard_completed: boolean;
 };
 
 export type BudgetCategory = {

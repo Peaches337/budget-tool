@@ -29,9 +29,7 @@
       });
       const json = await res.json();
       if (json.ok) {
-        // Seed budget then hard-redirect so the new session cookie is picked up
-        await fetch('/api/budget/seed', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
-        window.location.href = '/';
+        window.location.href = '/wizard';
       } else {
         error = json.error ?? 'Registration failed. Please try again.';
       }

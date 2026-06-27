@@ -18,7 +18,7 @@ export const PUT: RequestHandler = async (event) => {
 
   const body = await event.request.json();
 
-  const allowed = ['instance_name', 'registration_open', 'default_template', 'session_timeout_days'];
+  const allowed = ['instance_name', 'registration_open', 'default_template', 'session_timeout_days', 'instance_logo'];
 
   for (const key of allowed) {
     if (body[key] !== undefined) {

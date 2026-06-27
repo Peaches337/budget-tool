@@ -7,6 +7,7 @@
     registration_open: string;
     default_template: string;
     session_timeout_days: string;
+    instance_logo: string;
   };
 
   let config: Config = {
@@ -14,6 +15,7 @@
     registration_open: 'true',
     default_template: '',
     session_timeout_days: '30',
+    instance_logo: '',
   };
 
   let templates: Template[] = [];
@@ -80,6 +82,30 @@
             placeholder="Skint"
             required
           />
+        </div>
+
+        <div class="field">
+          <label>Instance logo</label>
+          <p class="field-hint">Upload a logo (PNG/SVG, max 200 KB). Shown in the app header.</p>
+          {#if config.instance_logo}
+            <div class="logo-preview">
+              <img src={config.instance_logo} alt="Current logo" class="logo-preview-img" />
+              <button type="button" class="btn-remove-logo" on:click={() => { config.instance_logo = ''; }}>Remove</button>
+            </div>
+          {/if}
+          <label class="logo-upload-btn">
+            {config.instance_logo ? 'Replace logo' : 'Upload logo'}
+            <input type="file" accept="image/png,image/svg+xml,image/jpeg" style="display:none"
+              on:change={async (e) => {
+                const file = (e.target as HTMLInputElement).files?.[0];
+                if (!file) return;
+                if (file.size > 200 * 1024) { error = 'Logo must be under 200 KB.'; return; }
+                const reader = new FileReader();
+                reader.onload = () => { config.instance_logo = reader.result as string; };
+                reader.readAsDataURL(file);
+              }}
+            />
+          </label>
         </div>
 
         <div class="field">
@@ -214,4 +240,15 @@
 
   .saved-msg { font-size: .875rem; color: var(--pos); }
   .error { font-size: .875rem; color: var(--neg); }
+
+  .logo-preview { display: flex; align-items: center; gap: .75rem; margin-bottom: .5rem; }
+  .logo-preview-img { height: 36px; max-width: 120px; object-fit: contain; border-radius: 4px; background: var(--surface-2); padding: 4px; }
+  .btn-remove-logo { font-size: .8rem; color: var(--neg, #e24b4a); background: none; border: none; cursor: pointer; }
+  .logo-upload-btn {
+  display: inline-block; padding: .45rem .9rem;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); font-size: .83rem; color: var(--fg);
+  cursor: pointer; transition: border-color .15s;
+}
+.logo-upload-btn:hover { border-color: var(--accent); color: var(--accent); }
 </style>
