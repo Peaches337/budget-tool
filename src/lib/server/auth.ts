@@ -62,12 +62,11 @@ export async function getUserFromEvent(event: RequestEvent): Promise<User | null
 }
 
 export function setSessionCookie(event: RequestEvent, sessionId: string): void {
-  const isHttps = event.request.url.startsWith('https://');
   event.cookies.set(COOKIE_NAME, sessionId, {
     path: '/',
     httpOnly: true,
     sameSite: 'lax',
-    secure: isHttps,
+    secure: false,
     maxAge: 60 * 60 * 24 * SESSION_DAYS
   });
 }
