@@ -51,6 +51,33 @@ function toCents(s: string): number | null {
   return Math.round(n * 100);
 }
 
+// ── Merchant name cleaner ────────────────────────────────────────────────────
+
+export function cleanDescription(raw: string): string {
+  let s = raw
+    // Remove card reference: "Card xx1234" or "Card XX1234"
+    .replace(/\bCard\s+[xX*]{2}\d+\b/gi, '')
+    // Remove value date: "Value Date: DD/MM/YYYY"
+    .replace(/\bValue Date:\s*\d{1,2}\/\d{1,2}\/\d{4}\b/gi, '')
+    // Remove "AUD 14.95" inline currency amounts
+    .replace(/\bAUD\s+[\d,]+\.?\d*\b/gi, '')
+    // Remove AU / AUS country suffix
+    .replace(/\s+AU[S]?\b/g, '')
+    // Remove bare location-ish codes: all-caps word ≥3 chars followed by 2-letter state code
+    .replace(/\b[A-Z]{3,}\s+(?:NSW|VIC|QLD|SA|WA|TAS|ACT|NT)\b/g, '')
+    // Remove 4–6 digit store/terminal numbers after a space
+    .replace(/\s+\d{4,6}\b/g, '')
+    // Remove trailing/leading punctuation and extra spaces
+    .replace(/[*_\-]+$/, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+
+  // Title-case: lowercase everything, then capitalise first letter of each word
+  s = s.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+
+  return s || raw;
+}
+
 // ── Format detectors ─────────────────────────────────────────────────────────
 
 type FormatDef = {
@@ -215,12 +242,48 @@ const FORMATS: FormatDef[] = [
   },
 ];
 
+function tryParseCommBankHeaderless(lines: string[]): DetectedFormat | null {
+  // CommBank exports: no header row, 4 columns: Date, Amount, Description, Balance
+  // Could be tab-separated or comma-separated (with quoted description)
+  const splitLine = (line: string) =>
+    line.includes('\t') ? line.split('\t').map(c => c.trim()) : parseCsvLine(line);
+
+  const cols0 = splitLine(lines[0]);
+  if (cols0.length < 3) return null;
+  if (!parseAusDate(cols0[0])) return null;
+  if (toCents(cols0[1]) == null) return null;
+
+  const rows: ParsedRow[] = [];
+  for (const line of lines) {
+    const c = splitLine(line);
+    if (c.length < 3) continue;
+    const date = parseAusDate(c[0]);
+    const amount = toCents(c[1]);
+    if (!date || amount == null) continue;
+    rows.push({
+      settled_at: date,
+      description: c[2],
+      amount_cents: amount,
+      balance_cents: c[3] ? toCents(c[3]) : null,
+    });
+  }
+  return rows.length ? { bank: 'CommBank', rows } : null;
+}
+
 export function detectAndParse(csvText: string): DetectedFormat {
-  const lines = csvText.split(/\r?\n/).filter(l => l.trim());
+  // Strip UTF-8 BOM that CommBank and some other banks prepend
+  const cleaned = csvText.replace(/^﻿/, '');
+  const lines = cleaned.split(/\r?\n/).filter(l => l.trim());
+  if (lines.length < 1) throw new Error('File appears empty.');
+
+  // Try CommBank headerless (tab or comma separated, no header row)
+  const tsv = tryParseCommBankHeaderless(lines);
+  if (tsv) return tsv;
+
   if (lines.length < 2) throw new Error('File appears empty or has only a header row.');
 
-  // Try each format starting from the top; skip preamble lines some banks emit
-  for (let startLine = 0; startLine < Math.min(5, lines.length); startLine++) {
+  // Try each format starting from the top; skip preamble lines some banks emit (up to 10)
+  for (let startLine = 0; startLine < Math.min(10, lines.length); startLine++) {
     const headers = parseCsvLine(lines[startLine]).map(h => h.replace(/^"|"$/g, '').trim());
     for (const fmt of FORMATS) {
       const parser = fmt.detect(headers);
@@ -243,17 +306,27 @@ export function detectAndParse(csvText: string): DetectedFormat {
 export async function importFile(
   userId: string,
   filename: string,
-  csvText: string
-): Promise<{ fileId: string; bank: string; imported: number; matched: number }> {
+  csvText: string,
+  netWorthEntryId?: string | null
+): Promise<{ fileId: string; bank: string; imported: number; matched: number; latestBalance: number | null }> {
   const { bank, rows } = detectAndParse(csvText);
 
   // Create file record
   const [fileRow] = await query<{ id: string }>(
-    `INSERT INTO imported_files (user_id, filename, bank_name, row_count)
-     VALUES ($1, $2, $3, $4) RETURNING id`,
-    [userId, filename, bank, rows.length]
+    `INSERT INTO imported_files (user_id, filename, bank_name, row_count, net_worth_entry_id)
+     VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+    [userId, filename, bank, rows.length, netWorthEntryId ?? null]
   );
   const fileId = fileRow.id;
+
+  // If linked to a net worth entry, update its balance to the latest row's balance
+  const latestBalance = rows[0]?.balance_cents ?? null;
+  if (netWorthEntryId && latestBalance != null) {
+    await query(
+      `UPDATE net_worth_entries SET amount = $1, last_updated = now() WHERE id = $2 AND user_id = $3`,
+      [(latestBalance / 100).toFixed(2), netWorthEntryId, userId]
+    );
+  }
 
   // Load budget items + saved merchant mappings for matching
   const items = await query<{ id: string; label: string; category_id: string }>(
@@ -276,17 +349,16 @@ export async function importFile(
 
     await query(
       `INSERT INTO imported_transactions
-         (user_id, file_id, settled_at, description, amount_cents, currency, balance_cents,
-          budget_item_id, match_confidence)
-       VALUES ($1,$2,$3,$4,$5,'AUD',$6,$7,$8)`,
+         (user_id, file_id, settled_at, description, clean_description, amount_cents, currency, balance_cents,
+          budget_item_id, match_confidence, merchant_normalised)
+       VALUES ($1,$2,$3,$4,$5,$6,'AUD',$7,$8,$9,$10)`,
       [
-        userId, fileId, row.settled_at, row.description, row.amount_cents,
-        row.balance_cents ?? null,
-        result.budget_item_id,
-        result.confidence
+        userId, fileId, row.settled_at, row.description, cleanDescription(row.description),
+        row.amount_cents, row.balance_cents ?? null,
+        result.budget_item_id, result.confidence, merchantNorm
       ]
     );
   }
 
-  return { fileId, bank, imported: rows.length, matched };
+  return { fileId, bank, imported: rows.length, matched, latestBalance };
 }

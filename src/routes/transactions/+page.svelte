@@ -141,12 +141,16 @@
   }
 
   // ── Imported tab ──────────────────────────────────────────────────────────
-  type ImportFile = { id: string; filename: string; bank_name: string; row_count: number; imported_at: string };
+  type ImportFile = {
+    id: string; filename: string; bank_name: string; row_count: number; imported_at: string;
+    net_worth_entry_id: string | null; net_worth_label: string | null;
+  };
   type ImportedTx = {
-    id: string; settled_at: string; description: string; amount_cents: number;
+    id: string; settled_at: string; description: string; clean_description: string | null; amount_cents: number;
     budget_item_id: string | null; budget_item_label: string | null;
     match_confidence: string | null; match_confirmed: boolean;
   };
+  type NWEntry = { id: string; label: string; institution: string | null; category: string };
 
   let importFiles: ImportFile[] = [];
   let selectedFileId: string | null = null;
@@ -160,10 +164,97 @@
   let fileInput: HTMLInputElement;
   let confirmDeleteId: string | null = null;
   let deleting = false;
+  let importRematching = false;
+
+  // Manual match for imported transactions
+  let importMenuOpenId: string | null = null;
+  let importMatchingTxId: string | null = null;
+  let importMatchItemId = '';
+  let importMatchLoading = false;
+  let importMatchError = '';
+
+  function toggleImportMenu(id: string, e: MouseEvent) {
+    e.stopPropagation();
+    importMenuOpenId = importMenuOpenId === id ? null : id;
+  }
+
+  function closeImportMenus() { importMenuOpenId = null; }
+
+  function openImportMatch(tx: ImportedTx) {
+    importMatchingTxId = tx.id;
+    importMatchItemId = tx.budget_item_id ?? '';
+    importMatchError = '';
+    importMenuOpenId = null;
+  }
+
+  async function saveImportMatch(tx: ImportedTx) {
+    importMatchError = '';
+    importMatchLoading = true;
+    try {
+      const res = await fetch(`/api/bank/import/transactions/${tx.id}/match`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ budget_item_id: importMatchItemId || null })
+      });
+      const json = await res.json();
+      if (json.ok) {
+        importMatchingTxId = null;
+        await loadImportedTxs(selectedFileId!, importPage);
+      } else {
+        importMatchError = json.error ?? 'Failed to save';
+      }
+    } finally {
+      importMatchLoading = false;
+    }
+  }
+
+  // Expanded raw description tracking
+  let expandedDescIds = new Set<string>();
+  function toggleDesc(id: string) { expandedDescIds = expandedDescIds.has(id) ? (expandedDescIds.delete(id), new Set(expandedDescIds)) : new Set([...expandedDescIds, id]); }
+
+  // Account picker modal
+  let accountPickerFile: File | null = null;
+  let nwEntries: NWEntry[] = [];
+  let pickerMode: 'existing' | 'new' = 'existing';
+  let pickerEntryId = '';
+  let pickerNewLabel = '';
+  let pickerNewInstitution = '';
+  let pickerNewCategory = 'Cash & Savings';
+  let pickerForFileId: string | null = null; // if set, we're importing-more for this file
+
+  const ASSET_CATEGORIES = ['Cash & Savings', 'Superannuation', 'Investments', 'Property', 'Vehicles', 'Other Assets'];
 
   async function loadImportFiles() {
     const res = await fetch('/api/bank/import').then(r => r.json()).catch(() => ({ ok: false }));
     if (res.ok) importFiles = res.data;
+  }
+
+  async function openAccountPicker(file: File, forFileId: string | null = null) {
+    const res = await fetch('/api/net-worth').then(r => r.json()).catch(() => ({ ok: false }));
+    nwEntries = res.ok ? res.data.filter((e: NWEntry & { entry_type: string }) => e.entry_type === 'asset') : [];
+    accountPickerFile = file;
+    pickerForFileId = forFileId;
+    pickerMode = nwEntries.length ? 'existing' : 'new';
+    pickerEntryId = nwEntries[0]?.id ?? '';
+    pickerNewLabel = '';
+    pickerNewInstitution = '';
+  }
+
+  async function rematchImported() {
+    if (!selectedFileId) return;
+    importRematching = true;
+    importError = '';
+    importSuccess = '';
+    try {
+      const res = await fetch('/api/bank/import/rematch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file_id: selectedFileId }) });
+      const json = await res.json();
+      if (json.ok) {
+        importSuccess = `Re-matched: ${json.data.matched} of ${json.data.total} transactions.`;
+        await loadImportedTxs(selectedFileId, importPage);
+      } else {
+        importError = json.error ?? 'Re-match failed';
+      }
+    } finally { importRematching = false; }
   }
 
   async function loadImportedTxs(fileId: string, pg = 1) {
@@ -187,17 +278,28 @@
   async function uploadFile() {
     const file = fileInput?.files?.[0];
     if (!file) return;
+    fileInput.value = '';
+    await openAccountPicker(file, null);
+  }
+
+  async function confirmImport() {
+    if (!accountPickerFile) return;
     importError = '';
     importSuccess = '';
     uploading = true;
     const fd = new FormData();
-    fd.append('file', file);
+    fd.append('file', accountPickerFile);
+    if (pickerMode === 'existing' && pickerEntryId) {
+      fd.append('net_worth_entry_id', pickerEntryId);
+    } else if (pickerMode === 'new' && pickerNewLabel.trim()) {
+      fd.append('create_account', JSON.stringify({ label: pickerNewLabel.trim(), institution: pickerNewInstitution.trim() || null, category: pickerNewCategory }));
+    }
+    accountPickerFile = null;
     try {
       const res = await fetch('/api/bank/import', { method: 'POST', body: fd });
       const json = await res.json();
       if (json.ok) {
         importSuccess = `Imported ${json.data.imported} transactions from ${json.data.bank} — ${json.data.matched} matched.`;
-        fileInput.value = '';
         await loadImportFiles();
         await selectFile(json.data.fileId);
       } else {
@@ -236,31 +338,6 @@
 </script>
 
 <div class="page">
-  <div class="page-header">
-    <div>
-      <h1>Transactions</h1>
-      {#if $bankConnection}
-        <div class="sub-text">
-          Up Bank · {$bankConnection.display_name ?? ''}
-          {#if $bankConnection.last_synced_at}
-            · Last synced {new Date($bankConnection.last_synced_at).toLocaleString()}
-          {/if}
-        </div>
-      {/if}
-    </div>
-    <div class="header-actions">
-      {#if activeTab === 'live' && $bankConnection}
-        <a href="/api/bank/export" download="skint-transactions.csv" class="btn-secondary">Export CSV</a>
-        <button class="btn-secondary" disabled={rematching} on:click={rematch}>
-          {rematching ? 'Matching…' : 'Re-match all'}
-        </button>
-        <button class="btn-primary" disabled={$bankSyncing} on:click={syncNow}>
-          {$bankSyncing ? 'Syncing…' : 'Sync now'}
-        </button>
-      {/if}
-    </div>
-  </div>
-
   <!-- Tabs -->
   <div class="tabs">
     <button class="tab" class:tab--active={activeTab === 'live'} on:click={() => { activeTab = 'live'; }}>
@@ -269,7 +346,26 @@
     <button class="tab" class:tab--active={activeTab === 'imported'} on:click={() => { activeTab = 'imported'; }}>
       Imported {#if importFiles.length}<span class="tab-badge">{importFiles.length}</span>{/if}
     </button>
+    {#if activeTab === 'live' && $bankConnection}
+      <div class="tab-spacer"></div>
+      <div class="tab-actions">
+        <a href="/api/bank/export" download="skint-transactions.csv" class="btn-ghost">Export CSV</a>
+        <button class="btn-ghost" disabled={rematching} on:click={rematch}>{rematching ? 'Matching…' : 'Re-match'}</button>
+        <button class="btn-sync" disabled={$bankSyncing} on:click={syncNow}>{$bankSyncing ? 'Syncing…' : 'Sync now'}</button>
+      </div>
+    {/if}
   </div>
+
+  {#if $bankConnection && activeTab === 'live'}
+    <div class="account-card">
+      <div class="account-row">
+        <span class="account-name">{$bankConnection.display_name ?? 'Up Bank'}</span>
+        {#if $bankConnection.last_synced_at}
+          <span class="account-synced">synced {new Date($bankConnection.last_synced_at).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+        {/if}
+      </div>
+    </div>
+  {/if}
 
   <!-- ── LIVE TAB ─────────────────────────────────────────────────────────── -->
   {#if activeTab === 'live'}
@@ -399,25 +495,13 @@
 
     <!-- Upload area -->
     <div class="import-upload">
-      <div class="import-upload-label">
-        Upload a bank statement CSV
-        <span class="import-hint">Supports ANZ, CommBank, Westpac, NAB, ING, St George, Bendigo, Suncorp, Macquarie</span>
-      </div>
-      <div class="import-upload-row">
-        <input
-          id="import-file"
-          name="import-file"
-          type="file"
-          accept=".csv,text/csv"
-          bind:this={fileInput}
-          class="file-input"
-          on:change={uploadFile}
-          disabled={uploading}
-        />
-        <label for="import-file" class="btn-secondary file-label" class:disabled={uploading}>
-          {uploading ? 'Importing…' : 'Choose CSV file'}
-        </label>
-      </div>
+      <input id="import-file" name="import-file" type="file" accept=".csv,text/csv"
+        bind:this={fileInput} class="file-input" on:change={uploadFile} disabled={uploading} />
+      <label for="import-file" class="upload-zone" class:uploading>
+        <span class="upload-icon">↑</span>
+        <span class="upload-label">{uploading ? 'Importing…' : 'Drop CSV or click to upload'}</span>
+        <span class="upload-hint">ANZ · CommBank · Westpac · NAB · ING · St George · Bendigo · Suncorp · Macquarie</span>
+      </label>
     </div>
 
     {#if importFiles.length === 0}
@@ -436,10 +520,10 @@
               class:import-file-btn--active={selectedFileId === f.id}
               on:click={() => selectFile(f.id)}
             >
+              <div class="import-file-bank">{f.bank_name}</div>
               <div class="import-file-name">{f.filename}</div>
               <div class="import-file-meta">
-                {f.bank_name} · {f.row_count} rows
-                · {new Date(f.imported_at).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}
+                {f.row_count} transactions · {new Date(f.imported_at).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}
               </div>
             </button>
           {/each}
@@ -456,21 +540,37 @@
             <div class="import-file-header">
               <div>
                 <span class="import-file-title">{selectedFile?.filename}</span>
-                <span class="import-file-subtitle">{selectedFile?.bank_name} · {selectedFile?.row_count} rows</span>
+                <span class="import-file-subtitle">
+                  {selectedFile?.bank_name} · {selectedFile?.row_count} rows
+                  {#if selectedFile?.net_worth_label}
+                    · <span class="nw-link-badge">↗ {selectedFile.net_worth_label}</span>
+                  {/if}
+                </span>
               </div>
-              {#if confirmDeleteId === selectedFileId}
-                <div class="delete-confirm">
-                  Delete all {selectedFile?.row_count} transactions?
-                  <button class="act-btn act-btn--danger" disabled={deleting} on:click={() => deleteImport(selectedFileId)}>
-                    {deleting ? 'Deleting…' : 'Yes, delete'}
-                  </button>
-                  <button class="act-btn" on:click={() => { confirmDeleteId = null; }}>Cancel</button>
-                </div>
-              {:else}
-                <button class="act-btn act-btn--danger" on:click={() => { confirmDeleteId = selectedFileId; }}>
-                  Delete import
+              <div class="import-header-actions">
+                <button class="btn-ghost" disabled={importRematching} on:click={rematchImported}>
+                  {importRematching ? 'Matching…' : 'Re-match'}
                 </button>
-              {/if}
+                <label class="btn-ghost file-label-inline">
+                  <input type="file" accept=".csv,text/csv" class="file-input"
+                    on:change={(e) => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) { (e.target as HTMLInputElement).value=''; openAccountPicker(f, selectedFileId); } }}
+                    disabled={uploading} />
+                  Import more
+                </label>
+                {#if confirmDeleteId === selectedFileId}
+                  <div class="delete-confirm">
+                    Delete all {selectedFile?.row_count} transactions?
+                    <button class="act-btn act-btn--danger" disabled={deleting} on:click={() => deleteImport(selectedFileId)}>
+                      {deleting ? 'Deleting…' : 'Yes, delete'}
+                    </button>
+                    <button class="act-btn" on:click={() => { confirmDeleteId = null; }}>Cancel</button>
+                  </div>
+                {:else}
+                  <button class="act-btn act-btn--danger" on:click={() => { confirmDeleteId = selectedFileId; }}>
+                    Delete
+                  </button>
+                {/if}
+              </div>
             </div>
 
             <div class="table-wrap">
@@ -478,29 +578,65 @@
                 <thead>
                   <tr>
                     <th>Date</th><th>Description</th><th class="th-right">Amount</th>
-                    <th>Budget item</th><th>Confidence</th>
+                    <th>Budget item</th><th>Confidence</th><th></th>
                   </tr>
                 </thead>
                 <tbody>
                   {#each importedTxs as tx (tx.id)}
                     <tr class:debit={isDebit(tx.amount_cents)} class:credit={!isDebit(tx.amount_cents)}>
                       <td class="td-date">{formatDate(tx.settled_at)}</td>
-                      <td class="td-desc"><div class="desc-main">{tx.description}</div></td>
+                      <td class="td-desc">
+                        <div class="desc-main">{tx.clean_description ?? tx.description}</div>
+                        {#if tx.clean_description && tx.clean_description !== tx.description}
+                          <button class="desc-raw-btn" on:click={() => toggleDesc(tx.id)}>
+                            {expandedDescIds.has(tx.id) ? tx.description : '···'}
+                          </button>
+                        {/if}
+                      </td>
                       <td class="td-amount" class:amount-debit={isDebit(tx.amount_cents)} class:amount-credit={!isDebit(tx.amount_cents)}>
                         {isDebit(tx.amount_cents) ? '−' : '+'}{formatAmount(tx.amount_cents)}
                       </td>
                       <td class="td-match">
-                        {#if tx.budget_item_label}
-                          <span class="match-label">{tx.budget_item_label}</span>
+                        {#if importMatchingTxId === tx.id}
+                          <div class="match-edit">
+                            <select class="match-select" bind:value={importMatchItemId}>
+                              <option value="">— unmatched —</option>
+                              {#each $categories ?? [] as cat}
+                                <optgroup label={cat.name}>
+                                  {#each cat.items ?? [] as item}
+                                    <option value={item.id}>{item.label}</option>
+                                  {/each}
+                                </optgroup>
+                              {/each}
+                            </select>
+                            {#if importMatchError}<div class="match-err">{importMatchError}</div>{/if}
+                          </div>
+                        {:else if tx.budget_item_label}
+                          <span class="match-label" class:match-confirmed={tx.match_confirmed}>{tx.budget_item_label}</span>
                         {:else}
                           <span class="match-none">—</span>
                         {/if}
                       </td>
                       <td class="td-conf">
                         {#if tx.match_confidence && tx.match_confidence !== 'unmatched'}
-                          <span class="badge badge--{tx.match_confidence}">{tx.match_confidence}</span>
+                          <span class="badge badge--{tx.match_confidence}">{tx.match_confirmed ? '✓ ' : ''}{tx.match_confidence}</span>
                         {:else}
                           <span class="badge badge--unmatched">unmatched</span>
+                        {/if}
+                      </td>
+                      <td class="td-actions">
+                        {#if importMatchingTxId === tx.id}
+                          <button class="act-btn act-btn--save" disabled={importMatchLoading} on:click={() => saveImportMatch(tx)}>Save</button>
+                          <button class="act-btn" on:click={() => { importMatchingTxId = null; }}>Cancel</button>
+                        {:else}
+                          <div class="menu-wrap">
+                            <button class="act-btn act-btn--menu" on:click={(e) => toggleImportMenu(tx.id, e)} title="More options">⋯</button>
+                            {#if importMenuOpenId === tx.id}
+                              <div class="dropdown-menu" role="menu">
+                                <button class="dropdown-item" on:click={() => openImportMatch(tx)}>🔗 Match to budget item</button>
+                              </div>
+                            {/if}
+                          </div>
                         {/if}
                       </td>
                     </tr>
@@ -533,6 +669,67 @@
 <!-- Click-outside overlay to close menus -->
 {#if menuOpenId}
   <div class="menu-overlay" on:click={closeMenus} role="presentation"></div>
+{/if}
+{#if importMenuOpenId}
+  <div class="menu-overlay" on:click={closeImportMenus} role="presentation"></div>
+{/if}
+
+<!-- Account picker modal -->
+{#if accountPickerFile}
+  <div class="modal-overlay" on:click={() => { accountPickerFile = null; }} role="presentation">
+    <div class="modal-card" on:click={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Link to account">
+      <div class="modal-header">
+        <h2>Link to account</h2>
+        <button class="modal-close" on:click={() => { accountPickerFile = null; }}>✕</button>
+      </div>
+      <p class="picker-hint">Which Net Worth account does <strong>{accountPickerFile.name}</strong> belong to?</p>
+
+      <div class="picker-tabs">
+        <button class="picker-tab" class:picker-tab--active={pickerMode === 'existing'} on:click={() => { pickerMode = 'existing'; }} disabled={nwEntries.length === 0}>
+          Existing account
+        </button>
+        <button class="picker-tab" class:picker-tab--active={pickerMode === 'new'} on:click={() => { pickerMode = 'new'; }}>
+          New account
+        </button>
+        <button class="picker-tab" class:picker-tab--active={pickerMode !== 'existing' && pickerMode !== 'new'} on:click={() => { pickerMode = 'existing'; pickerEntryId = ''; confirmImport(); }}>
+          Skip
+        </button>
+      </div>
+
+      {#if pickerMode === 'existing'}
+        <div class="modal-field">
+          <label for="picker-entry">Account</label>
+          <select id="picker-entry" name="picker-entry" bind:value={pickerEntryId}>
+            {#each nwEntries as e}
+              <option value={e.id}>{e.label}{e.institution ? ` — ${e.institution}` : ''}</option>
+            {/each}
+          </select>
+        </div>
+      {:else if pickerMode === 'new'}
+        <div class="modal-field">
+          <label for="picker-label">Account name</label>
+          <input id="picker-label" name="picker-label" type="text" placeholder="e.g. Everyday Spending" bind:value={pickerNewLabel} />
+        </div>
+        <div class="modal-field">
+          <label for="picker-inst">Institution (optional)</label>
+          <input id="picker-inst" name="picker-inst" type="text" placeholder="e.g. Commonwealth Bank" bind:value={pickerNewInstitution} />
+        </div>
+        <div class="modal-field">
+          <label for="picker-cat">Category</label>
+          <select id="picker-cat" name="picker-cat" bind:value={pickerNewCategory}>
+            {#each ASSET_CATEGORIES as cat}<option>{cat}</option>{/each}
+          </select>
+        </div>
+      {/if}
+
+      <div class="modal-actions">
+        <button class="btn-secondary" on:click={() => { accountPickerFile = null; }}>Cancel</button>
+        <button class="btn-primary" disabled={uploading || (pickerMode === 'new' && !pickerNewLabel.trim())} on:click={confirmImport}>
+          {uploading ? 'Importing…' : 'Import'}
+        </button>
+      </div>
+    </div>
+  </div>
 {/if}
 
 <!-- Add to Tax modal -->
@@ -593,15 +790,11 @@
 <style>
   .page { padding: 1.75rem 2rem; }
 
-  .page-header {
-    display: flex; align-items: flex-start; justify-content: space-between;
-    gap: 1rem; margin-bottom: 1rem;
-  }
-  h1 { margin: 0 0 .25rem; }
-  .sub-text { font-size: .8rem; color: var(--fg-muted); }
-
   /* Tabs */
-  .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 1.25rem; }
+  .tabs {
+    display: flex; align-items: center; gap: 0;
+    border-bottom: 1px solid var(--border); margin-bottom: 0;
+  }
   .tab {
     padding: .55rem 1.1rem; font-size: .875rem; font-weight: 500;
     background: none; border: none; border-bottom: 2px solid transparent;
@@ -615,6 +808,34 @@
     background: color-mix(in srgb, var(--accent) 15%, transparent);
     color: var(--accent); border-radius: 99px;
   }
+  .tab-spacer { flex: 1; }
+  .tab-actions { display: flex; align-items: center; gap: .4rem; padding-bottom: 2px; }
+  .btn-ghost {
+    padding: .3rem .7rem; font-size: .8rem; border: 1px solid var(--border);
+    border-radius: var(--radius-sm); background: none; color: var(--fg-muted);
+    cursor: pointer; transition: background 120ms, color 120ms; white-space: nowrap;
+    text-decoration: none; display: inline-flex; align-items: center;
+  }
+  .btn-ghost:hover:not(:disabled) { background: var(--surface-2); color: var(--fg); }
+  .btn-ghost:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-sync {
+    padding: .3rem .75rem; font-size: .8rem; font-weight: 600;
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    border-radius: var(--radius-sm); cursor: pointer; transition: opacity 120ms; white-space: nowrap;
+  }
+  .btn-sync:hover:not(:disabled) { opacity: .8; }
+  .btn-sync:disabled { opacity: .45; cursor: not-allowed; }
+
+  /* Account card */
+  .account-card {
+    padding: .75rem 1rem; margin: .75rem 0;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); border-left: 3px solid var(--accent);
+  }
+  .account-row { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
+  .account-name { font-size: .9rem; font-weight: 600; color: var(--accent); letter-spacing: -.01em; }
+  .account-synced { font-size: .75rem; color: var(--fg-faint); margin-left: auto; }
 
   .banner { font-size: .82rem; padding: .45rem .875rem; border-radius: var(--radius-sm); margin-bottom: .75rem; }
   .banner--ok  { background: color-mix(in srgb, #1D9E75 12%, transparent); color: #1D9E75; border: 1px solid color-mix(in srgb, #1D9E75 30%, transparent); }
@@ -626,7 +847,7 @@
   .empty-hint  { font-size: .875rem; }
   .empty-hint a { color: var(--accent); }
 
-  .filters { display: flex; gap: .65rem; margin-bottom: 1rem; flex-wrap: wrap; }
+  .filters { display: flex; gap: .65rem; margin: .75rem 0 1rem; flex-wrap: wrap; }
   .filter-select {
     padding: .35rem .6rem; font-size: .82rem; border: 1px solid var(--border);
     border-radius: var(--radius-sm); background: var(--surface); color: var(--fg); cursor: pointer;
@@ -711,28 +932,36 @@
   .btn-primary:disabled { opacity: .55; cursor: not-allowed; }
 
   /* Import tab */
-  .import-upload {
-    background: var(--surface); border: 1px dashed var(--border); border-radius: var(--radius);
-    padding: 1.1rem 1.25rem; margin-bottom: 1.25rem;
-    display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap;
-  }
-  .import-upload-label { font-size: .875rem; font-weight: 500; }
-  .import-hint { display: block; font-size: .75rem; color: var(--fg-muted); margin-top: .2rem; font-weight: 400; }
-  .import-upload-row { display: flex; align-items: center; gap: .75rem; }
+  .import-upload { margin: .75rem 0 1rem; }
   .file-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
-  .file-label { cursor: pointer; }
+  .upload-zone {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: .35rem; padding: 1.5rem 2rem; cursor: pointer;
+    background: var(--surface); border: 1px dashed color-mix(in srgb, var(--accent) 35%, var(--border));
+    border-radius: var(--radius); transition: border-color 150ms, background 150ms;
+    text-align: center;
+  }
+  .upload-zone:hover, .upload-zone:focus-within { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 4%, var(--surface)); }
+  .upload-zone.uploading { opacity: .6; cursor: wait; }
+  .upload-icon { font-size: 1.4rem; color: var(--accent); opacity: .7; line-height: 1; }
+  .upload-label { font-size: .875rem; font-weight: 500; color: var(--fg); }
+  .upload-hint { font-size: .72rem; color: var(--fg-faint); letter-spacing: .02em; }
 
   .import-layout { display: flex; gap: 1rem; align-items: flex-start; }
-  .import-sidebar { width: 220px; flex-shrink: 0; display: flex; flex-direction: column; gap: .4rem; }
+  .import-sidebar { width: 210px; flex-shrink: 0; display: flex; flex-direction: column; gap: .35rem; }
   .import-file-btn {
-    width: 100%; text-align: left; padding: .6rem .75rem; background: var(--surface);
+    width: 100%; text-align: left; padding: .65rem .8rem; background: var(--surface);
     border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer;
-    transition: background 120ms; color: var(--fg);
+    transition: background 120ms, border-color 120ms; color: var(--fg);
   }
   .import-file-btn:hover { background: var(--surface-2); }
   .import-file-btn--active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
-  .import-file-name { font-size: .82rem; font-weight: 500; word-break: break-all; }
-  .import-file-meta { font-size: .72rem; color: var(--fg-muted); margin-top: .15rem; }
+  .import-file-bank {
+    font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--accent); margin-bottom: .2rem;
+  }
+  .import-file-name { font-size: .8rem; font-weight: 500; word-break: break-all; color: var(--fg); }
+  .import-file-meta { font-size: .7rem; color: var(--fg-muted); margin-top: .2rem; }
 
   .import-main { flex: 1; min-width: 0; }
   .import-select-hint { color: var(--fg-muted); font-size: .875rem; padding: 2rem; text-align: center; }
@@ -742,7 +971,32 @@
   }
   .import-file-title { font-weight: 600; font-size: .9rem; margin-right: .5rem; }
   .import-file-subtitle { font-size: .78rem; color: var(--fg-muted); }
+  .import-header-actions { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
+  .nw-link-badge { color: var(--accent); font-weight: 500; }
   .delete-confirm { display: flex; align-items: center; gap: .5rem; font-size: .82rem; color: var(--fg-muted); }
+  .file-label-inline { cursor: pointer; }
+  .file-label-inline input[type="file"] { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+  /* Clean description toggle */
+  .desc-raw-btn {
+    display: block; font-size: .7rem; color: var(--fg-faint); background: none; border: none;
+    padding: 0; cursor: pointer; margin-top: 2px; text-align: left;
+    word-break: break-all;
+  }
+  .desc-raw-btn:hover { color: var(--fg-muted); }
+
+  /* Account picker modal */
+  .picker-hint { font-size: .85rem; color: var(--fg-muted); margin: 0 0 1rem; }
+  .picker-hint strong { color: var(--fg); }
+  .picker-tabs { display: flex; gap: .35rem; margin-bottom: 1rem; }
+  .picker-tab {
+    padding: .3rem .75rem; font-size: .8rem; border: 1px solid var(--border);
+    border-radius: var(--radius-sm); background: none; color: var(--fg-muted); cursor: pointer;
+    transition: background 120ms, color 120ms;
+  }
+  .picker-tab:hover:not(:disabled) { background: var(--surface-2); color: var(--fg); }
+  .picker-tab--active { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+  .picker-tab:disabled { opacity: .4; cursor: not-allowed; }
 
   /* 3-dot menu */
   .menu-wrap { position: relative; display: inline-block; }

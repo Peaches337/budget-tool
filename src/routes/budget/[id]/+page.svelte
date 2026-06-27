@@ -8,11 +8,16 @@
 
   const FREQUENCIES: Frequency[] = ['weekly', 'fortnightly', 'monthly', 'quarterly', 'annually'];
 
-  // Transaction actuals (monthly average per budget item)
+  // Transaction actuals (monthly average per budget item, expenses)
   type ItemActual = { budget_item_id: string; monthly_avg: number; months_of_data: number; tx_count: number };
   let bankActuals: Record<string, ItemActual> = {};
   let bankActualsLoaded = false;
   let appliedActuals: Set<string> = new Set();
+
+  // FY income actuals (per income budget item)
+  type IncomeActualFY = { budget_item_id: string; fy_total: number; tx_count: number; fy_label: string };
+  let incomeActuals: Record<string, IncomeActualFY> = {};
+  let incomeActualsLoaded = false;
   const VISIBILITY_LABELS: Record<Visibility, string> = {
     private:     'Private',
     amount_only: 'Amount only',
@@ -29,14 +34,19 @@
 
   onMount(async () => {
     if ($categories.length === 0) await loadBudget();
-    const [tiersRes, actualsRes] = await Promise.all([
+    const [tiersRes, actualsRes, incomeActualsRes] = await Promise.all([
       fetch('/api/subscription-tiers').then(r => r.json()),
-      fetch('/api/bank/item-actuals').then(r => r.json()).catch(() => ({ ok: false }))
+      fetch('/api/bank/item-actuals').then(r => r.json()).catch(() => ({ ok: false })),
+      fetch('/api/bank/income-actuals').then(r => r.json()).catch(() => ({ ok: false }))
     ]);
     if (tiersRes.ok) tierMap = tiersRes.data;
     if (actualsRes.ok) {
       bankActuals = Object.fromEntries(actualsRes.data.map((a: ItemActual) => [a.budget_item_id, a]));
       bankActualsLoaded = true;
+    }
+    if (incomeActualsRes.ok) {
+      incomeActuals = Object.fromEntries(incomeActualsRes.data.map((a: IncomeActualFY) => [a.budget_item_id, a]));
+      incomeActualsLoaded = true;
     }
   });
 
@@ -54,6 +64,16 @@
   function removeActual(item: BudgetItem) {
     appliedActuals = new Set([...appliedActuals].filter(id => id !== item.id));
     updateItem(item.id, { amount: 0 });
+  }
+
+  function applyIncomeActual(item: BudgetItem, fyTotal: number) {
+    const freqDivisors: Record<Frequency, number> = {
+      weekly: 52, fortnightly: 26, monthly: 12, quarterly: 4, annually: 1
+    };
+    const divisor = freqDivisors[item.frequency as Frequency] ?? 1;
+    const newAmount = Math.round((fyTotal / divisor) * 100) / 100;
+    appliedActuals = new Set([...appliedActuals, item.id]);
+    updateItem(item.id, { amount: newAmount });
   }
 
   function tiersForItem(item: BudgetItem): Tier[] {
@@ -256,6 +276,30 @@
             ×
           </button>
         </div>
+
+        {#if incomeActualsLoaded && incomeActuals[item.id] && cat.is_income}
+          {@const a = incomeActuals[item.id]}
+          {@const applied = appliedActuals.has(item.id)}
+          <div class="actual-hint actual-hint--income" class:actual-hint--applied={applied}>
+            <span class="actual-hint-label">
+              Actual income <span class="actual-hint-period">({a.fy_label})</span>
+            </span>
+            <span class="actual-hint-amount">{fmt(a.fy_total)}/yr</span>
+            {#if applied}
+              <button
+                class="actual-hint-apply actual-hint-remove"
+                title="Undo applied actual"
+                on:click={() => removeActual(item)}
+              >✓ Applied — Undo</button>
+            {:else}
+              <button
+                class="actual-hint-apply"
+                title="Use this as your budget amount"
+                on:click={() => applyIncomeActual(item, a.fy_total)}
+              >Use actual</button>
+            {/if}
+          </div>
+        {/if}
 
         {#if bankActualsLoaded && bankActuals[item.id] && !cat.is_income}
           {@const a = bankActuals[item.id]}
@@ -925,4 +969,5 @@
     border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
   }
   .actual-hint-remove:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); opacity: 1; }
+  .actual-hint--income { border-left: 2px solid color-mix(in srgb, var(--accent) 50%, transparent); }
 </style>
